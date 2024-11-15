@@ -1,3 +1,4 @@
+
 **Buy Me a Coffee ☕️**
 
 If you find this project helpful, consider supporting me by buying me a coffee!
@@ -5,8 +6,6 @@ If you find this project helpful, consider supporting me by buying me a coffee!
 [Buy me a coffee](https://www.donationalerts.com/r/iafilin)
 
 Thank you! 🙏
-
-
 
 # EloquentHttpAdapter
 
@@ -17,7 +16,7 @@ EloquentHttpAdapter is a Laravel package that allows you to work with RESTful AP
 To install the package, you can add it to your project via Composer:
 
 ```bash
-composer require iafilin/eloquent-http-adapter
+composer require iafilin/eloquenthttpadapter
 ```
 
 ## Usage
