@@ -171,4 +171,4 @@ This package handles errors by logging exceptions during API requests. If an err
 
 ## License
 
-This package is open-source and licensed under the [MIT license](LICENSE).
+This package is open-source and licensed under the [MIT license](license.md).
