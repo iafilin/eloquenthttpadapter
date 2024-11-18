@@ -1,29 +1,28 @@
 
-**Buy Me a Coffee ☕️**
-
-If you find this project helpful, consider supporting me by buying me a coffee!
-
-[Buy me a coffee](https://www.donationalerts.com/r/iafilin)
-
-Thank you! 🙏
-
 # EloquentHttpAdapter
 
-EloquentHttpAdapter is a Laravel package that allows you to work with RESTful API data using an Eloquent-like syntax. This package makes it easy to perform HTTP requests and handle responses as if working with a standard Eloquent model.
+**EloquentHttpAdapter** is a Laravel package that provides an alternative to [calebporzio/sushi](https://github.com/calebporzio/sushi). It allows you to work with RESTful API data using an Eloquent-like syntax.
+
+This package was originally developed to integrate [Filament](https://filamentphp.com) with APIs, making it a convenient tool for admin panels. However, thanks to its flexibility, it can also be used for any task requiring API integration with an Eloquent-like interface.
+
+---
 
 ## Installation
 
-To install the package, you can add it to your project via Composer:
+Install the package via Composer:
 
 ```bash
 composer require iafilin/eloquenthttpadapter
 ```
 
+
+---
+
 ## Usage
 
-### Setting Up the Model
+### Setting Up a Model
 
-To enable HTTP interactions on your model, use the `InteractsWithHttp` trait and define an `httpClient` method that sets the API endpoint for the model. Here’s an example:
+To enable API integration, use the `InteractsWithHttp` trait and define a custom `httpClient` method to configure the HTTP client:
 
 ```php
 namespace App\Models;
@@ -37,7 +36,7 @@ class Purchase extends Model
     use InteractsWithHttp;
 
     /**
-     * Set up the HTTP client with the API endpoint.
+     * Configure the HTTP client with the API endpoint.
      */
     private static function httpClient(): PendingRequest
     {
@@ -46,128 +45,172 @@ class Purchase extends Model
 }
 ```
 
-### API Interface Requirements
+---
 
-For the EloquentHttpAdapter package to interact effectively, the external API should follow these guidelines:
+### Registering a Fetch Parameters Resolver
 
-- **Standard REST Endpoints**:
-    - `POST /api/resource` for creating records.
-    - `GET /api/resource` for retrieving all records or paginated results.
-    - `GET /api/resource/{id}` for retrieving a specific record.
-    - `PUT /api/resource/{id}` for updating a specific record.
-    - `DELETE /api/resource/{id}` for deleting a specific record.
+You can define the logic for building HTTP query parameters using the `registerFetchParamsResolver` method. This allows dynamic configuration of pagination, filtering, and sorting parameters.
 
-- **Pagination**:
-    - The API should support pagination parameters, typically `page` and `per_page`.
-    - Response should include `data` (array of results), `total` (total items), `per_page` (items per page), and optionally `current_page`.
+Additionally, within the resolver, you have access to the `getQuery()` object, which lets you retrieve Eloquent `wheres` conditions and use them to generate HTTP parameters.
 
-- **Filtering and Sorting**:
-    - For filtering, the API should accept `filter[column_name]=value` parameters.
-    - For sorting, the API should support a `sort` parameter, where `sort=column_name` sorts in ascending order and `sort=-column_name` in descending order.
+Example setup:
+```php
+class Purchase extends Model
+{
+    use InteractsWithHttp;
 
-- **Response Structure**:
-    - Responses should be in JSON format.
-    - For lists, JSON should include a `data` key with an array of records.
-    - For individual records, JSON should directly contain the record’s fields.
+    protected static function boot()
+    {
+        parent::boot();
 
-Example of a paginated response structure:
+        static::registerFetchParamsResolver(function () {
+            $params = [
+                'page' => request()->query('page', 1),
+                'per_page' => request()->query('per_page', 10),
+            ];
+
+            // Parse `wheres` from the query object
+            foreach ($this->getQuery()->wheres as $where) {
+                $params["filter[{$where['column']}"] = $where['value'];
+            }
+
+            return $params;
+        });
+    }
+}
+```
+
+---
+
+## API Requirements
+
+To ensure compatibility with the package, your API should follow these conventions:
+
+1. **Standard REST endpoints:**
+    - `POST /api/resource` — Create records.
+    - `GET /api/resource` — Fetch records (paginated or full list).
+    - `GET /api/resource/{id}` — Fetch a single record.
+    - `PUT /api/resource/{id}` — Update a record.
+    - `DELETE /api/resource/{id}` — Delete a record.
+
+2. **Response Structure:**
+    - **Lists:** Should include `data`, `total`, `per_page`, and `current_page`.
+    - **Single Record:** Should return attributes directly without nesting.
+
+Example paginated response:
 ```json
 {
     "data": [
-        { "id": 1, "attribute": "value" },
-        { "id": 2, "attribute": "value" }
+        { "id": 1, "name": "Item 1" },
+        { "id": 2, "name": "Item 2" }
     ],
     "total": 50,
-    "per_page": 15,
+    "per_page": 10,
     "current_page": 1
 }
 ```
 
-### CRUD Operations
+3. **Pagination:**
+    - Support for `page` and `per_page` query parameters.
 
-You can now use standard Eloquent methods on `Purchase` to interact with your API:
+4. **Filters and Sorting:**
+    - Filters: `filter[column]=value`.
+    - Sorting: `sort=column` for ascending and `sort=-column` for descending.
 
-- **Create a record:**
+---
 
-    ```php
-    $purchase = Purchase::create([
-        'attribute' => 'value',
-        // Other attributes...
-    ]);
-    ```
+## CRUD Operations
 
-- **Read records:**
+Once your model is set up, you can use standard Eloquent methods to interact with your API:
 
-    ```php
-    // Fetch all records
-    $purchases = Purchase::all();
-
-    // Fetch records with pagination
-    $purchases = Purchase::paginate(15);
-    ```
-
-- **Update a record:**
-
-    ```php
-    $purchase = Purchase::find(1);
-    $purchase->update([
-        'attribute' => 'new value',
-        // Other attributes...
-    ]);
-    ```
-
-- **Delete a record:**
-
-    ```php
-    $purchase = Purchase::find(1);
-    $purchase->delete();
-    ```
-
-### Integration with Spatie QueryBuilder
-
-Currently, EloquentHttpAdapter supports interaction with **Spatie QueryBuilder** for flexible filtering, sorting, and includes. This enables you to leverage the power of Spatie's QueryBuilder when working with external API data.
-
-For example:
-
+### Create a Record
 ```php
-use Spatie\QueryBuilder\QueryBuilder;
-
-$purchases = QueryBuilder::for(Purchase::class)
-    ->allowedFilters(['status', 'created_at'])
-    ->allowedSorts(['created_at', 'total'])
-    ->allowedIncludes(['items'])
-    ->paginate(15);
+$purchase = Purchase::create(['name' => 'New Item']);
 ```
 
-### Query Builder Features
+### Read Records
+```php
+$purchases = Purchase::all(); // Fetch all records
+$purchases = Purchase::paginate(10); // Paginate results
+```
 
-You can use common Eloquent methods for filtering, sorting, and eager loading:
+### Update a Record
+```php
+$purchase = Purchase::find(1);
+$purchase->update(['name' => 'Updated Name']);
+```
 
-- **Filter and sort data:**
+### Delete a Record
+```php
+$purchase = Purchase::find(1);
+$purchase->delete();
+```
 
-    ```php
-    $purchases = Purchase::where('status', 'active')
-        ->orderBy('created_at', 'desc')
-        ->get();
-    ```
+---
 
-- **Paginate results:**
+## Customizing HTTP Requests
 
-    ```php
-    $purchases = Purchase::paginate(10);
-    ```
+You can fully customize HTTP request behavior by overriding the `httpClient` method in your model. For example, adding headers or specific configurations:
 
-### Customization
+```php
+private static function httpClient(): PendingRequest
+{
+    return \Http::baseUrl('/api/admin/purchases')
+                ->withHeaders(['Authorization' => 'Bearer token']);
+}
+```
 
-You can customize the HTTP client setup by overriding the `httpClient` method in your model and specifying different base URLs, headers, or configurations.
+---
 
-## Advanced Usage
+If you have any questions or suggestions, feel free to open an issue or contribute! 💡
 
-If you need advanced functionality, you can directly call the `httpClient` in your model to make custom HTTP requests, like adding headers or specific query parameters.
+---
+
+### Customizing API Fetch Parameters with `registerFetchParamsResolver`
+
+The `registerFetchParamsResolver` method allows you to customize the HTTP query parameters sent to your API for fetching data. It provides a powerful way to dynamically build parameters like pagination, filters, and sorting based on the current Eloquent query or incoming user requests.
+
+With access to the Eloquent query object (`$this->getQuery()`), you can parse `wheres`, `orders`, and other query conditions, transforming them into HTTP parameters compatible with your API.
+
+#### Key Benefits:
+- **Dynamic configuration:** Automatically adapt HTTP query parameters to match user input or specific query requirements.
+- **Seamless integration:** Utilize existing Eloquent query methods while maintaining API compatibility.
+- **Support for complex queries:** Build filters, pagination, and sorting logic based on both application and API needs.
+
+#### Example Usage:
+```php
+class Purchase extends Model
+{
+    use InteractsWithHttp;
+
+    protected static function boot()
+    {
+        parent::boot();
+
+        static::registerFetchParamsResolver(function () {
+            $params = [
+                'page' => request()->query('page', 1),
+                'per_page' => request()->query('per_page', 10),
+            ];
+
+            // Parse where conditions from the query object
+            foreach ($this->getQuery()->wheres as $where) {
+                $params["filter[{$where['column']}"]"] = $where['value'];
+            }
+
+            return $params;
+        });
+    }
+}
+```
+
+This makes it easy to dynamically adapt HTTP query parameters based on user input or predefined conditions in your Laravel application.
 
 ## Error Handling
 
-This package handles errors by logging exceptions during API requests. If an error occurs, it will return `null` instead of throwing an exception, allowing your application to handle failures gracefully.
+The package automatically logs errors during API interactions and returns `null` in case of failure. This ensures graceful handling of API downtime or errors without throwing exceptions.
+
+---
 
 ## License
 
