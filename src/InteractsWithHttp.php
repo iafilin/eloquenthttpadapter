@@ -7,6 +7,7 @@ use Illuminate\Support\Facades\Http;
 
 trait InteractsWithHttp
 {
+    private static ?\Closure $fetchParamsResolver = null;
     /**
      * Override the Eloquent query builder with HttpQueryBuilder.
      *
@@ -15,7 +16,12 @@ trait InteractsWithHttp
      */
     public function newEloquentBuilder($query): HttpQueryBuilder
     {
-        return new HttpQueryBuilder($query, static::httpClient());
+        return new HttpQueryBuilder($query, static::httpClient(),static::$fetchParamsResolver);
+    }
+
+    private static function registerFetchParamsResolver(\Closure $closure): void
+    {
+        static::$fetchParamsResolver = $closure;
     }
 
     /**

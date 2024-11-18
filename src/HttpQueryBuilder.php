@@ -9,6 +9,7 @@ use Illuminate\Http\Client\Response;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Pagination\Paginator;
 use Exception;
+use Illuminate\Support\Collection;
 
 class HttpQueryBuilder extends Builder
 {
@@ -17,7 +18,12 @@ class HttpQueryBuilder extends Builder
     private ?Response $response = null;
     private bool $dataFetched = false;
 
-    public function __construct(QueryBuilder $query, private readonly PendingRequest $httpClient)
+
+    public function __construct(
+        QueryBuilder                    $query,
+        private readonly PendingRequest $httpClient,
+        private readonly ?\Closure      $fetchParamsResolver = null
+    )
     {
         parent::__construct($query);
     }
@@ -38,7 +44,7 @@ class HttpQueryBuilder extends Builder
      *
      * @return array|null
      */
-    protected function runSelect()
+    protected function runSelect(): ?array
     {
         $this->fetchDataIfNeeded();
         return $this->response->json('data');
@@ -80,21 +86,6 @@ class HttpQueryBuilder extends Builder
         return parent::hydrate($this->response->json('data'))->count();
     }
 
-    /**
-     * Delete a record via the API.
-     *
-     * @return bool|null
-     */
-    public function delete(): ?bool
-    {
-        try {
-            $this->httpClient->delete('/' . $this->getModel()->getKey())->throw();
-            return true;
-        } catch (Exception $exception) {
-            report($exception);
-            return null;
-        }
-    }
 
     /**
      * Retrieve all records via the API.
@@ -112,40 +103,52 @@ class HttpQueryBuilder extends Builder
     }
 
     /**
-     * Core method to build API parameters and perform the request.
+     * Fetch data from the server
      *
      * @return void
+     * @throws Exception
      */
     private function fetchData(): void
     {
+        // Execute HTTP request with parameters formatted for Spatie QueryBuilder API on the server side
+        $this->response = $this->httpClient->get('/', $this->httpQueryParams());
+    }
+
+    /**
+     * Get HTTP query parameters
+     * @return Collection
+     * @throws Exception
+     */
+    private function httpQueryParams(): \Illuminate\Support\Collection
+    {
+        if ($this->fetchParamsResolver instanceof \Closure) {
+            $fetchParams = $this->fetchParamsResolver->call($this);
+
+
+            if ($fetchParams instanceof Collection) {
+                return $fetchParams;
+            }
+
+            if (is_array($fetchParams)) {
+                return collect($fetchParams);
+            }
+
+            throw new Exception('fetchParamsResolver must return Collection or array');
+        }
         $params = collect([
             'page' => $this->paginatePage,
             'per_page' => $this->paginatePerPage
         ]);
 
-        // Convert filters into API query parameters
-        foreach ($this->getQuery()->wheres as $where) {
+        $this->parseWheres($params, $this->getQuery()->wheres);
 
-            $column = last(explode('.', $where['column']));
-            $operator = $where['operator'] ?? '=';
-            $value = $where['value'];
 
-            if ($operator === '=') {
-                $params->put("filter[{$column}]", $value);
-            } elseif ($operator === 'in' && isset($where['values'])) {
-                $params->put("filter[{$column}]", implode(',', $where['values']));
-            } elseif (in_array($operator, ['>', '<', '>=', '<=', '!='])) {
-                // Format operator and value for Spatie QueryBuilder API support
-                $params->put("filter[{$column}]", "{$operator}{$value}");
-            }
-        }
-
-        // Convert eager loading relations to API include parameters
+        // Обработка eager load (включение связанных данных)
         if ($this->eagerLoad) {
             $params->put('include', implode(',', array_keys($this->eagerLoad)));
         }
 
-        // Convert sorting to API sort parameters
+        // Обработка сортировки
         if ($this->getQuery()->orders) {
             $sortParams = collect($this->getQuery()->orders)
                 ->map(fn($order) => $order['direction'] === 'asc' ? $order['column'] : "-{$order['column']}")
@@ -153,7 +156,62 @@ class HttpQueryBuilder extends Builder
             $params->put('sort', $sortParams);
         }
 
-        // Execute HTTP request with parameters formatted for Spatie QueryBuilder API on the server side
-        $this->response = $this->httpClient->get('/', $params->toArray());
+        return $params;
     }
+
+    /**
+     * Parse where clauses and add them to the request parameters
+     * @param Collection $params
+     * @param array $wheres
+     * @return Collection
+     */
+    private function parseWheres(\Illuminate\Support\Collection $params, array $wheres): Collection
+    {
+        foreach ($wheres as $where) {
+            if (isset($where['type']) && $where['type'] === 'Nested') {
+                $params = $params->merge($this->parseWheres($params, $where['query']->wheres));
+            }
+
+            if (isset($where['column'])) {
+                $column = last(explode('.', $where['column']));
+                $operator = $where['operator'] ?? '=';
+                $value = $where['value'];
+
+                switch (strtolower($operator)) {
+                    case '=':
+                        $params->put("filter[{$column}]", $value);
+                        break;
+                    case 'in':
+                        if (is_array($value)) {
+                            $params->put("filter[{$column}]", implode(',', $value));
+                        }
+                        break;
+                    case '!=':
+                        // Эмулируем NOT EQUAL через специальный формат, например, `!value`
+                        $params->put("filter[{$column}]", "!{$value}");
+                        break;
+                    case '>':
+                    case '<':
+                    case '>=':
+                    case '<=':
+                        $params->put("filter[{$column}]", "{$operator}{$value}");
+                        break;
+                    case 'like':
+                        // Преобразование LIKE в поддерживаемый формат, например, заменяя `%` на `*`
+                        $params->put("filter[{$column}]", str($value)->replace('%', '')->toString());
+                        break;
+                    case 'between':
+                        if (is_array($value) && count($value) === 2) {
+                            $params->put("filter[{$column}]", "{$value[0]},{$value[1]}");
+                        }
+                        break;
+                    default:
+                        // Дополнительные операторы не поддерживаются laravel-query-builder
+                        break;
+                }
+            }
+        }
+        return $params;
+    }
+
 }
