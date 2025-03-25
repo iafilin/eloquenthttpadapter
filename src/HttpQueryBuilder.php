@@ -122,7 +122,7 @@ class HttpQueryBuilder extends Builder
     private function httpQueryParams(): \Illuminate\Support\Collection
     {
         if ($this->fetchParamsResolver instanceof \Closure) {
-            $fetchParams = $this->fetchParamsResolver->call($this);
+            $fetchParams = $this->fetchParamsResolver->call($this, $this->paginatePage, $this->paginatePerPage);
 
 
             if ($fetchParams instanceof Collection) {
