@@ -63,10 +63,10 @@ class Purchase extends Model
     {
         parent::boot();
 
-        static::registerFetchParamsResolver(function () {
+        static::registerFetchParamsResolver(function ($page, $perPage) {
             $params = [
-                'page' => request()->query('page', 1),
-                'per_page' => request()->query('per_page', 10),
+                'page' => $page,
+                'per_page' => $perPage),
             ];
 
             // Parse `wheres` from the query object
