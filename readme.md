@@ -1,3 +1,5 @@
+## Donate: https://boosty.to/iafilin/donate
+
 
 # EloquentHttpAdapter
 
