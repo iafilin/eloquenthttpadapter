@@ -57,9 +57,10 @@ class HttpQueryBuilder extends Builder
      * @param array $columns
      * @param string $pageName
      * @param int|null $page
+     * @param int|null $total
      * @return LengthAwarePaginator
      */
-    public function paginate($perPage = null, $columns = ['*'], $pageName = 'page', $page = null): LengthAwarePaginator
+    public function paginate($perPage = null, $columns = ['*'], $pageName = 'page', $page = null, $total = null): LengthAwarePaginator
     {
         $this->paginatePerPage = $perPage ?: $this->paginatePerPage;
         $this->paginatePage = $page ?: Paginator::resolveCurrentPage($pageName);

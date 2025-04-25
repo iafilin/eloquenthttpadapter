@@ -1,8 +1,7 @@
 {
     "name": "iafilin/eloquenthttpadapter",
-    "version": "1.0.2",
-    "minimum-stability": "stable",
-    "description": "EloquentHttpAdapter is a Laravel package that allows you to work with RESTful API data using an Eloquent-like syntax. This package makes it easy to perform HTTP requests and handle responses as if working with a standard Eloquent model.",
+    "version": "1.0.3",
+    "description": "EloquentHttpAdapter is a Laravel package that allows you to work with RESTful API data using an Eloquent-like syntax.",
     "license": "MIT",
     "authors": [
         {
@@ -14,6 +13,10 @@
     "homepage": "https://github.com/iafilin/eloquenthttpadapter",
     "keywords": [
         "Laravel",
+        "Eloquent",
+        "HTTP",
+        "API",
+        "Adapter",
         "EloquentHttpAdapter"
     ],
     "require": {
@@ -23,8 +26,8 @@
         "illuminate/database": "^9.0|^10.0|^11.0|^12.0"
     },
     "require-dev": {
-        "phpunit/phpunit": "~9.0",
-        "orchestra/testbench": "~7"
+        "phpunit/phpunit": "^9.0",
+        "orchestra/testbench": "^7.0"
     },
     "autoload": {
         "psr-4": {
@@ -33,7 +36,7 @@
     },
     "autoload-dev": {
         "psr-4": {
-            "Iafilin\\EloquentHttpAdapter\\Tests\\": "tests"
+            "Iafilin\\EloquentHttpAdapter\\Tests\\": "tests/"
         }
     },
     "extra": {
@@ -45,5 +48,7 @@
                 "EloquentHttpAdapter": "Iafilin\\EloquentHttpAdapter\\Facades\\EloquentHttpAdapter"
             }
         }
-    }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
 }
