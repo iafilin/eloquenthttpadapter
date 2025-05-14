@@ -169,6 +169,7 @@ class HttpQueryBuilder extends Builder
     private function parseWheres(\Illuminate\Support\Collection $params, array $wheres): Collection
     {
         foreach ($wheres as $where) {
+            
             if (isset($where['type']) && $where['type'] === 'Nested') {
                 $params = $params->merge($this->parseWheres($params, $where['query']->wheres));
             }
@@ -176,11 +177,15 @@ class HttpQueryBuilder extends Builder
             if (isset($where['column'])) {
                 $column = last(explode('.', $where['column']));
                 $operator = $where['operator'] ?? '=';
-                $value = $where['value'];
+                $value = $where['value'] ?? $where['values'] ?? [];
 
                 switch (strtolower($operator)) {
                     case '=':
-                        $params->put("filter[{$column}]", $value);
+                        if (is_array($value)) {
+                            $params->put("filter[{$column}]", implode(',', $value));
+                        }else{
+                            $params->put("filter[{$column}]", $value);
+                        }
                         break;
                     case 'in':
                         if (is_array($value)) {
@@ -212,6 +217,7 @@ class HttpQueryBuilder extends Builder
                 }
             }
         }
+
         return $params;
     }
 

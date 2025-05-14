@@ -1,6 +1,6 @@
 {
     "name": "iafilin/eloquenthttpadapter",
-    "version": "1.0.3",
+    "version": "1.0.4",
     "description": "EloquentHttpAdapter is a Laravel package that allows you to work with RESTful API data using an Eloquent-like syntax.",
     "license": "MIT",
     "authors": [
