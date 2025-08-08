@@ -1,0 +1,21 @@
+# Dependencies
+/vendor/
+
+# Composer
+composer.lock
+.phpunit.result.cache
+
+# IDE/editor
+.idea/
+.vscode/
+
+# OS files
+.DS_Store
+
+# Env and build artifacts
+.env
+coverage/
+build/
+dist/
+
+
