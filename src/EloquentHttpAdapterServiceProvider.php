@@ -29,10 +29,17 @@ class EloquentHttpAdapterServiceProvider extends ServiceProvider
     {
         $this->mergeConfigFrom(__DIR__.'/../config/eloquent-http-adapter.php', 'eloquent-http-adapter');
 
-        // Register the service the package provides.
-        //        $this->app->singleton('eloquent-http-adapter', function ($app) {
-        //            return new EloquentHttpAdapter;
-        //        });
+        $this->app->singleton('http-model', function ($app) {
+            return new Support\HttpModelManager();
+        });
+
+        // Server-side helpers
+        $this->app->singleton(\Iafilin\EloquentHttpAdapter\Server\QueryApplier::class, function ($app) {
+            return new \Iafilin\EloquentHttpAdapter\Server\QueryApplier();
+        });
+        $this->app->singleton(\Iafilin\EloquentHttpAdapter\Server\HttpResponder::class, function ($app) {
+            return new \Iafilin\EloquentHttpAdapter\Server\HttpResponder();
+        });
     }
 
     /**

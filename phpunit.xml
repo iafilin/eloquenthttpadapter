@@ -19,4 +19,7 @@
             <directory>src/</directory>
         </whitelist>
     </filter>
+    <php>
+        <ini name="error_reporting" value="E_ALL &amp; ~E_DEPRECATED &amp; ~E_USER_DEPRECATED"/>
+    </php>
 </phpunit>

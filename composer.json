@@ -50,7 +50,7 @@
                 "Iafilin\\EloquentHttpAdapter\\EloquentHttpAdapterServiceProvider"
             ],
             "aliases": {
-                "EloquentHttpAdapter": "Iafilin\\EloquentHttpAdapter\\Facades\\EloquentHttpAdapter"
+                "HttpModel": "Iafilin\\EloquentHttpAdapter\\Facades\\HttpModel"
             }
         }
     },
