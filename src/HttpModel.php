@@ -310,7 +310,9 @@ abstract class HttpModel extends Model implements HttpModelInterface
             if (is_array($value) && $this->isListArray($value)) {
                 $relatedModels = [];
                 foreach ($value as $item) {
-                    if (!is_array($item)) { continue; }
+                    if (!is_array($item)) {
+                        continue;
+                    }
                     $related = new $relatedClass();
                     $related->forceFill($item);
                     $related->exists = true;

@@ -26,8 +26,8 @@ class HttpQueryBuilder extends Builder
         QueryBuilder $query,
         PendingRequest $httpClient,
         ?\Closure $fetchParamsResolver = null
-    )
-    {
+    ) {
+
         parent::__construct($query);
         $this->httpClient = $httpClient;
         $this->fetchParamsResolver = $fetchParamsResolver;
@@ -64,7 +64,25 @@ class HttpQueryBuilder extends Builder
         $this->paginatePage = $page ?: Paginator::resolveCurrentPage($pageName);
         $this->isPaginated = true;
 
-        $this->fetchDataIfNeeded();
+        // Always refetch to avoid stale data after mutations (e.g., bulk delete)
+        $this->dataFetched = false;
+        $this->fetchData();
+        $this->dataFetched = true;
+
+        if (!$this->response || !$this->response->successful()) {
+            return new LengthAwarePaginator([], 0, $this->paginatePerPage, $this->paginatePage);
+        }
+
+        $dataKey = config('eloquent-http-adapter.response.data_key', 'data');
+        $totalKey = config('eloquent-http-adapter.response.total_key', 'total');
+        $perPageKey = config('eloquent-http-adapter.response.per_page_key', 'per_page');
+
+        $data = $this->response->json($dataKey) ?? [];
+        $total = $this->response->json($totalKey) ?? 0;
+        $perPage = $this->response->json($perPageKey) ?? $this->paginatePerPage;
+
+        $collection = $this->hydrate($data);
+        $this->initializeIncludedRelationsForCollection($collection);
 
         if (!$this->response || !$this->response->successful()) {
             return new LengthAwarePaginator([], 0, $this->paginatePerPage, $this->paginatePage);
@@ -91,7 +109,11 @@ class HttpQueryBuilder extends Builder
 
     public function count($columns = '*'): int
     {
-        $this->fetchDataIfNeeded();
+        // Always refetch to avoid stale data after mutations
+        $this->dataFetched = false;
+        $this->fetchData();
+        $this->dataFetched = true;
+
 
         if (!$this->response || !$this->response->successful()) {
             return 0;
@@ -107,11 +129,15 @@ class HttpQueryBuilder extends Builder
         $this->paginatePage = 1;
         $this->paginatePerPage = $this->getMaxPerPage();
         $this->isPaginated = false;
-        $this->fetchDataIfNeeded();
+        // Always refetch to avoid stale data after mutations
+        $this->dataFetched = false;
+        $this->fetchData();
+        $this->dataFetched = true;
 
         if (!$this->response || !$this->response->successful()) {
             return $this->getModel() ? $this->getModel()->newCollection() : new \Illuminate\Database\Eloquent\Collection();
         }
+
 
         $dataKey = config('eloquent-http-adapter.response.data_key', 'data');
         $data = $this->response->json($dataKey) ?? [];
@@ -158,6 +184,7 @@ class HttpQueryBuilder extends Builder
         ]);
         return 'httpqb:' . sha1($base);
     }
+
 
     private function httpQueryParams(): Collection
     {
@@ -211,6 +238,20 @@ class HttpQueryBuilder extends Builder
         $processedWheres = [];
 
         foreach ($wheres as $where) {
+            if (!is_array($where)) {
+                // Unsupported where shape; skip safely
+                continue;
+            }
+            // Support Eloquent's "where key in (...)" used by Filament selection
+            if (isset($where['type']) && strtolower((string) $where['type']) === 'in') {
+                if (isset($where['column'])) {
+                    $column = $this->extractColumnName($where['column']);
+                    $values = $where['values'] ?? [];
+                    $this->addWhereParameter($params, $column, 'in', $values);
+                }
+                continue;
+            }
+
             $whereHash = md5(serialize($where));
             if (in_array($whereHash, $processedWheres)) {
                 continue;
@@ -245,7 +286,8 @@ class HttpQueryBuilder extends Builder
     private function addWhereParameter(Collection $params, string $column, string $operator, $value): void
     {
         $filterPrefix = config('eloquent-http-adapter.query_builder.filter_prefix', 'filter');
-        $key = "$filterPrefix[$column]";
+        $key = "{$filterPrefix}[{$column}]";
+
 
         switch (strtolower($operator)) {
             case '=':
