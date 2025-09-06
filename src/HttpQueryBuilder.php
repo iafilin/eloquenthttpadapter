@@ -10,6 +10,7 @@ use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Pagination\Paginator;
 use Exception;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 
 class HttpQueryBuilder extends Builder
 {
@@ -17,20 +18,22 @@ class HttpQueryBuilder extends Builder
     private int $paginatePage = 1;
     private ?Response $response = null;
     private bool $dataFetched = false;
-
+    private bool $isPaginated = false;
+    private PendingRequest $httpClient;
+    private ?\Closure $fetchParamsResolver;
 
     public function __construct(
-        QueryBuilder                    $query,
-        private readonly PendingRequest $httpClient,
-        private readonly ?\Closure      $fetchParamsResolver = null
-    )
-    {
+        QueryBuilder $query,
+        PendingRequest $httpClient,
+        ?\Closure $fetchParamsResolver = null
+    ) {
         parent::__construct($query);
+        $this->httpClient = $httpClient;
+        $this->fetchParamsResolver = $fetchParamsResolver;
+
+        $this->paginatePerPage = (int) config('eloquent-http-adapter.pagination.default_per_page', 15);
     }
 
-    /**
-     * Lazy-load data if not yet fetched.
-     */
     protected function fetchDataIfNeeded(): void
     {
         if (!$this->dataFetched) {
@@ -39,186 +42,276 @@ class HttpQueryBuilder extends Builder
         }
     }
 
-    /**
-     * Override the runSelect method to retrieve data via HTTP.
-     *
-     * @return array|null
-     */
     protected function runSelect(): ?array
     {
         $this->fetchDataIfNeeded();
-        return $this->response->json('data');
+
+        if (!$this->response || !$this->response->successful()) {
+            return null;
+        }
+
+        $dataKey = config('eloquent-http-adapter.response.data_key', 'data');
+        $data = $this->response->json($dataKey);
+        return is_array($data) ? $data : null;
     }
 
-    /**
-     * Paginate results via the API.
-     *
-     * @param int|null $perPage
-     * @param array $columns
-     * @param string $pageName
-     * @param int|null $page
-     * @param int|null $total
-     * @return LengthAwarePaginator
-     */
-    public function paginate($perPage = null, $columns = ['*'], $pageName = 'page', $page = null, $total = null): LengthAwarePaginator
+    public function paginate($perPage = null, $columns = ['*'], $pageName = null, $page = null, $total = null): LengthAwarePaginator
     {
+        $pageName = $pageName ?: config('eloquent-http-adapter.pagination.page_name', 'page');
+
         $this->paginatePerPage = $perPage ?: $this->paginatePerPage;
         $this->paginatePage = $page ?: Paginator::resolveCurrentPage($pageName);
+        $this->isPaginated = true;
 
-        $this->fetchDataIfNeeded();
+        // Always refetch to avoid stale data after mutations (e.g., bulk delete)
+        $this->dataFetched = false;
+        $this->fetchData();
+        $this->dataFetched = true;
+
+        if (!$this->response || !$this->response->successful()) {
+            return new LengthAwarePaginator([], 0, $this->paginatePerPage, $this->paginatePage);
+        }
+
+        $dataKey = config('eloquent-http-adapter.response.data_key', 'data');
+        $totalKey = config('eloquent-http-adapter.response.total_key', 'total');
+        $perPageKey = config('eloquent-http-adapter.response.per_page_key', 'per_page');
+
+        $data = $this->response->json($dataKey) ?? [];
+        $total = $this->response->json($totalKey) ?? 0;
+        $perPage = $this->response->json($perPageKey) ?? $this->paginatePerPage;
+
+        $collection = $this->hydrate($data);
+        $this->initializeIncludedRelationsForCollection($collection);
 
         return new LengthAwarePaginator(
-            $this->hydrate($this->response->json('data')),
-            $this->response->json('total'),
-            $this->response->json('per_page'),
+            $collection,
+            $total,
+            $perPage,
             $this->paginatePage
         );
     }
 
-    /**
-     * Retrieve the count of records via API.
-     *
-     * @param string $columns
-     * @return int
-     */
     public function count($columns = '*'): int
     {
-        $this->fetchDataIfNeeded();
-        return parent::hydrate($this->response->json('data'))->count();
+        // Always refetch to avoid stale data after mutations
+        $this->dataFetched = false;
+        $this->fetchData();
+        $this->dataFetched = true;
+
+        if (!$this->response || !$this->response->successful()) {
+            return 0;
+        }
+
+        $dataKey = config('eloquent-http-adapter.response.data_key', 'data');
+        $data = $this->response->json($dataKey) ?? [];
+        return parent::hydrate($data)->count();
     }
 
-
-    /**
-     * Retrieve all records via the API.
-     *
-     * @param array $columns
-     * @return \Illuminate\Database\Eloquent\Collection
-     */
     public function get($columns = ['*'])
     {
         $this->paginatePage = 1;
-        $this->paginatePerPage = 1000;
-        $this->fetchDataIfNeeded();
+        $this->paginatePerPage = $this->getMaxPerPage();
+        $this->isPaginated = false;
+        // Always refetch to avoid stale data after mutations
+        $this->dataFetched = false;
+        $this->fetchData();
+        $this->dataFetched = true;
 
-        return $this->hydrate($this->response->json('data'));
+        if (!$this->response || !$this->response->successful()) {
+            return $this->getModel() ? $this->getModel()->newCollection() : new \Illuminate\Database\Eloquent\Collection();
+        }
+
+        $dataKey = config('eloquent-http-adapter.response.data_key', 'data');
+        $data = $this->response->json($dataKey) ?? [];
+        $collection = $this->hydrate($data);
+        $this->initializeIncludedRelationsForCollection($collection);
+        return $collection;
     }
 
-    /**
-     * Fetch data from the server
-     *
-     * @return void
-     * @throws Exception
-     */
+    protected function getMaxPerPage(): int
+    {
+        return (int) config('eloquent-http-adapter.pagination.max_per_page', 1000);
+    }
+
     private function fetchData(): void
     {
-        // Execute HTTP request with parameters formatted for Spatie QueryBuilder API on the server side
-        $this->response = $this->httpClient->get('/', $this->httpQueryParams());
+        try {
+            $params = $this->httpQueryParams();
+            $cacheEnabled = (bool) config('eloquent-http-adapter.cache.enabled', false);
+
+            if ($cacheEnabled) {
+                $ttl = (int) config('eloquent-http-adapter.cache.ttl', 300);
+                $cacheKey = $this->buildCacheKey($params);
+                $this->response = Cache::remember($cacheKey, $ttl, function () use ($params) {
+                    return $this->httpClient->get('/', $params);
+                });
+            } else {
+                $this->response = $this->httpClient->get('/', $params);
+            }
+        } catch (Exception $e) {
+            report($e);
+            $this->response = null;
+        }
     }
 
-    /**
-     * Get HTTP query parameters
-     * @return Collection
-     * @throws Exception
-     */
-    private function httpQueryParams(): \Illuminate\Support\Collection
+    private function buildCacheKey(Collection $params): string
+    {
+        $model = $this->getModel() ? get_class($this->getModel()) : 'no-model';
+        $base = implode('|', [
+            $model,
+            (string) $this->paginatePage,
+            (string) $this->paginatePerPage,
+            json_encode($params->toArray()),
+            $this->isPaginated ? 'paginated' : 'all',
+        ]);
+        return 'httpqb:' . sha1($base);
+    }
+
+    private function httpQueryParams(): Collection
     {
         if ($this->fetchParamsResolver instanceof \Closure) {
-            $fetchParams = $this->fetchParamsResolver->call($this, $this->paginatePage, $this->paginatePerPage);
+            try {
+                $fetchParams = $this->fetchParamsResolver->call($this, $this->paginatePage, $this->paginatePerPage);
 
+                if ($fetchParams instanceof Collection) {
+                    return $fetchParams;
+                }
 
-            if ($fetchParams instanceof Collection) {
-                return $fetchParams;
+                if (is_array($fetchParams)) {
+                    return collect($fetchParams);
+                }
+
+                throw new Exception('fetchParamsResolver must return Collection or array');
+            } catch (Exception $e) {
+                report($e);
+                return collect();
             }
-
-            if (is_array($fetchParams)) {
-                return collect($fetchParams);
-            }
-
-            throw new Exception('fetchParamsResolver must return Collection or array');
         }
+
+        $pageName = config('eloquent-http-adapter.pagination.page_name', 'page');
+        $perPageName = config('eloquent-http-adapter.pagination.per_page_name', 'per_page');
+
         $params = collect([
-            'page' => $this->paginatePage,
-            'per_page' => $this->paginatePerPage
+            $pageName => $this->paginatePage,
+            $perPageName => $this->paginatePerPage
         ]);
 
         $this->parseWheres($params, $this->getQuery()->wheres);
 
-
-        // Обработка eager load (включение связанных данных)
         if ($this->eagerLoad) {
-            $params->put('include', implode(',', array_keys($this->eagerLoad)));
+            $includeKey = config('eloquent-http-adapter.query_builder.include_prefix', 'include');
+            $params->put($includeKey, implode(',', array_keys($this->eagerLoad)));
         }
 
-        // Обработка сортировки
         if ($this->getQuery()->orders) {
+            $sortPrefix = config('eloquent-http-adapter.query_builder.sort_prefix', 'sort');
             $sortParams = collect($this->getQuery()->orders)
                 ->map(fn($order) => $order['direction'] === 'asc' ? $order['column'] : "-{$order['column']}")
                 ->implode(',');
-            $params->put('sort', $sortParams);
+            $params->put($sortPrefix, $sortParams);
         }
 
         return $params;
     }
 
-    /**
-     * Parse where clauses and add them to the request parameters
-     * @param Collection $params
-     * @param array $wheres
-     * @return Collection
-     */
-    private function parseWheres(\Illuminate\Support\Collection $params, array $wheres): Collection
+    private function parseWheres(Collection $params, array $wheres): Collection
     {
+        $processedWheres = [];
+
         foreach ($wheres as $where) {
-            
+            if (!is_array($where)) {
+                // Unsupported where shape; skip safely
+                continue;
+            }
+            // Support Eloquent's "where key in (...)" used by Filament selection
+            if (isset($where['type']) && strtolower((string) $where['type']) === 'in') {
+                if (isset($where['column'])) {
+                    $column = $this->extractColumnName($where['column']);
+                    $values = $where['values'] ?? [];
+                    $this->addWhereParameter($params, $column, 'in', $values);
+                }
+                continue;
+            }
+            $whereHash = md5(serialize($where));
+            if (in_array($whereHash, $processedWheres)) {
+                continue;
+            }
+            $processedWheres[] = $whereHash;
+
             if (isset($where['type']) && $where['type'] === 'Nested') {
-                $params = $params->merge($this->parseWheres($params, $where['query']->wheres));
+                if (isset($where['query']) && $where['query'] instanceof QueryBuilder) {
+                    $params = $params->merge($this->parseWheres($params, $where['query']->wheres));
+                }
+                continue;
             }
 
             if (isset($where['column'])) {
-                $column = last(explode('.', $where['column']));
+                $column = $this->extractColumnName($where['column']);
                 $operator = $where['operator'] ?? '=';
                 $value = $where['value'] ?? $where['values'] ?? [];
 
-                switch (strtolower($operator)) {
-                    case '=':
-                        if (is_array($value)) {
-                            $params->put("filter[{$column}]", implode(',', $value));
-                        }else{
-                            $params->put("filter[{$column}]", $value);
-                        }
-                        break;
-                    case 'in':
-                        if (is_array($value)) {
-                            $params->put("filter[{$column}]", implode(',', $value));
-                        }
-                        break;
-                    case '!=':
-                        // Эмулируем NOT EQUAL через специальный формат, например, `!value`
-                        $params->put("filter[{$column}]", "!{$value}");
-                        break;
-                    case '>':
-                    case '<':
-                    case '>=':
-                    case '<=':
-                        $params->put("filter[{$column}]", "{$operator}{$value}");
-                        break;
-                    case 'like':
-                        // Преобразование LIKE в поддерживаемый формат, например, заменяя `%` на `*`
-                        $params->put("filter[{$column}]", str($value)->replace('%', '')->toString());
-                        break;
-                    case 'between':
-                        if (is_array($value) && count($value) === 2) {
-                            $params->put("filter[{$column}]", "{$value[0]},{$value[1]}");
-                        }
-                        break;
-                    default:
-                        // Дополнительные операторы не поддерживаются laravel-query-builder
-                        break;
-                }
+                $this->addWhereParameter($params, $column, $operator, $value);
             }
         }
 
         return $params;
     }
 
+    private function extractColumnName(string $column): string
+    {
+        $parts = explode('.', $column);
+        return end($parts);
+    }
+
+    private function addWhereParameter(Collection $params, string $column, string $operator, $value): void
+    {
+        $filterPrefix = config('eloquent-http-adapter.query_builder.filter_prefix', 'filter');
+        $key = "{$filterPrefix}[{$column}]";
+
+        switch (strtolower($operator)) {
+            case '=':
+                $params->put($key, is_array($value) ? implode(',', $value) : $value);
+                break;
+
+            case 'in':
+                if (is_array($value)) {
+                    $params->put($key, implode(',', $value));
+                }
+                break;
+
+            case '!=':
+                $params->put($key, "!{$value}");
+                break;
+
+            case '>':
+            case '<':
+            case '>=':
+            case '<=':
+                $params->put($key, "{$operator}{$value}");
+                break;
+
+            case 'like':
+                $cleanValue = str_replace(['%', '_'], ['*', '?'], (string) $value);
+                $params->put($key, $cleanValue);
+                break;
+
+            case 'between':
+                if (is_array($value) && count($value) === 2) {
+                    $params->put($key, "{$value[0]},{$value[1]}");
+                }
+                break;
+
+            default:
+                break;
+        }
+    }
+
+    private function initializeIncludedRelationsForCollection($collection): void
+    {
+        foreach ($collection as $model) {
+            if (method_exists($model, 'initializeIncludedRelations')) {
+                $model->initializeIncludedRelations();
+            }
+        }
+    }
 }
