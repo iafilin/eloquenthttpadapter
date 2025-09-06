@@ -27,6 +27,7 @@ class HttpQueryBuilder extends Builder
         PendingRequest $httpClient,
         ?\Closure $fetchParamsResolver = null
     ) {
+
         parent::__construct($query);
         $this->httpClient = $httpClient;
         $this->fetchParamsResolver = $fetchParamsResolver;
@@ -83,6 +84,21 @@ class HttpQueryBuilder extends Builder
         $collection = $this->hydrate($data);
         $this->initializeIncludedRelationsForCollection($collection);
 
+        if (!$this->response || !$this->response->successful()) {
+            return new LengthAwarePaginator([], 0, $this->paginatePerPage, $this->paginatePage);
+        }
+
+        $dataKey = config('eloquent-http-adapter.response.data_key', 'data');
+        $totalKey = config('eloquent-http-adapter.response.total_key', 'total');
+        $perPageKey = config('eloquent-http-adapter.response.per_page_key', 'per_page');
+
+        $data = $this->response->json($dataKey) ?? [];
+        $total = $this->response->json($totalKey) ?? 0;
+        $perPage = $this->response->json($perPageKey) ?? $this->paginatePerPage;
+
+        $collection = $this->hydrate($data);
+        $this->initializeIncludedRelationsForCollection($collection);
+
         return new LengthAwarePaginator(
             $collection,
             $total,
@@ -97,6 +113,7 @@ class HttpQueryBuilder extends Builder
         $this->dataFetched = false;
         $this->fetchData();
         $this->dataFetched = true;
+
 
         if (!$this->response || !$this->response->successful()) {
             return 0;
@@ -120,6 +137,7 @@ class HttpQueryBuilder extends Builder
         if (!$this->response || !$this->response->successful()) {
             return $this->getModel() ? $this->getModel()->newCollection() : new \Illuminate\Database\Eloquent\Collection();
         }
+
 
         $dataKey = config('eloquent-http-adapter.response.data_key', 'data');
         $data = $this->response->json($dataKey) ?? [];
@@ -166,6 +184,7 @@ class HttpQueryBuilder extends Builder
         ]);
         return 'httpqb:' . sha1($base);
     }
+
 
     private function httpQueryParams(): Collection
     {
@@ -232,6 +251,7 @@ class HttpQueryBuilder extends Builder
                 }
                 continue;
             }
+
             $whereHash = md5(serialize($where));
             if (in_array($whereHash, $processedWheres)) {
                 continue;
@@ -267,6 +287,7 @@ class HttpQueryBuilder extends Builder
     {
         $filterPrefix = config('eloquent-http-adapter.query_builder.filter_prefix', 'filter');
         $key = "{$filterPrefix}[{$column}]";
+
 
         switch (strtolower($operator)) {
             case '=':
