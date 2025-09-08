@@ -20,6 +20,50 @@ composer require iafilin/eloquenthttpadapter
 
 ---
 
+## Quick start (TL;DR)
+
+Use your Eloquent models on the client, and one helper on the server.
+
+Client model (goes to API):
+
+```php
+class Purchase extends \Iafilin\EloquentHttpAdapter\HttpModel
+{
+    public function httpClient(): \Illuminate\Http\Client\PendingRequest
+    {
+        return \Http::asJson()->baseUrl('/api/admin/purchases');
+    }
+
+    // Optional: short names in UI → relation paths
+    public function getFilterAliases(): array
+    {
+        return ['name' => 'user.name', 'email' => 'user.email'];
+    }
+}
+```
+
+Server controller (applies params):
+
+```php
+use Iafilin\EloquentHttpAdapter\Server\HttpApiQuery;
+
+public function index(\Illuminate\Http\Request $request)
+{
+    return HttpApiQuery::paginate(
+        \App\Models\Purchase::query(),
+        $request,
+        allowedFilters: ['id','status','user.name','name'],
+        allowedSorts: ['id','status','created_at'],
+        allowedIncludes: ['user'],
+        fieldAliases: ['name' => 'user.name'],
+    );
+}
+```
+
+That is enough to make Filament `searchable()`/`sortable()` columns, filters and includes work against your API.
+
+---
+
 ## Examples
 
 See the `examples/` directory for runnable snippets:
