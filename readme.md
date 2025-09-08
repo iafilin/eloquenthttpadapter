@@ -17,6 +17,12 @@ Install the package via Composer:
 composer require iafilin/eloquenthttpadapter
 ```
 
+Use the latest dev branch while features stabilize:
+
+```bash
+composer require iafilin/eloquenthttpadapter:dev-dev
+```
+
 
 ---
 
@@ -61,6 +67,28 @@ public function index(\Illuminate\Http\Request $request)
 ```
 
 That is enough to make Filament `searchable()`/`sortable()` columns, filters and includes work against your API.
+
+---
+
+## Use without Filament
+
+Filament не обязателен. Вы можете использовать `HttpModel` как обычный Eloquent‑источник данных в сервисах/контроллерах/CLI.
+
+```php
+// Пример: простой поиск и сортировка без Filament
+$q = Purchase::query()
+    ->with(['user'])                    // → include=user
+    ->where('user.name', 'like', '%ig%')// → filter[user.name]=*ig*
+    ->where('status', '!=', 'rejected') // → filter[status]=!rejected
+    ->orderBy('created_at', 'desc');    // → sort=-created_at
+
+$paginator = $q->paginate(20);          // → page/per_page; вернётся обычный LengthAwarePaginator
+```
+
+Советы:
+- Для коротких имён используйте `getFilterAliases()` в модели (например, `name → user.name`).
+- Для запросов по диапазону задавайте строку `start,end` в одном значении: `filter[created_at]=2025-01-01,2025-01-31`.
+- Любые `with()` добавят `include=...`.
 
 ---
 
@@ -372,6 +400,54 @@ public function index(Request $request)
     );
 }
 ```
+
+Security: use allow‑lists to avoid arbitrary columns from incoming requests. `fieldAliases` enables accepting short client names (e.g., `name`) and mapping them to relation paths (`user.name`). `compositeOrFilters` defines virtual fields which OR several columns (e.g., `goods_summary`).
+
+---
+
+## Supported operators (filters)
+
+| Client value | SQL effect |
+| --- | --- |
+| `value` | `=` |
+| `!value` | `!=` |
+| `a,b,c` | `IN (...)` |
+| `start,end` | `BETWEEN` (for configured fields or when `infer_between=true`) |
+| `>x`, `>=x`, `<x`, `<=x` | Comparisons |
+| `*abc*`, `ab?c` | `LIKE` (`*`→`%`, `?`→`_`) |
+
+Global search: `search=...` builds OR across `searchableFields`.
+
+---
+
+## Client caching
+
+Enable response caching if needed:
+
+```php
+// config/eloquent-http-adapter.php
+'cache' => [
+    'enabled' => true,
+    'ttl' => 300, // seconds
+],
+```
+
+The cache key is built from model, page, per_page, normalized params and pagination flag.
+
+---
+
+## Error handling
+
+- By default errors are logged; null/empty collections are returned.
+- To throw exceptions:
+
+```php
+'error_handling' => [
+    'throw_exceptions' => true,
+]
+```
+
+Override `handleError()` in your model for custom logic.
 
 ### 3) Accepted parameters
 - Filters: `filter[column]=value` with operators
