@@ -72,23 +72,23 @@ That is enough to make Filament `searchable()`/`sortable()` columns, filters and
 
 ## Use without Filament
 
-Filament не обязателен. Вы можете использовать `HttpModel` как обычный Eloquent‑источник данных в сервисах/контроллерах/CLI.
+Filament is optional. You can use `HttpModel` as a regular Eloquent-like data source in services/controllers/CLI.
 
 ```php
-// Пример: простой поиск и сортировка без Filament
+// Example: basic search and sort without Filament
 $q = Purchase::query()
     ->with(['user'])                    // → include=user
     ->where('user.name', 'like', '%ig%')// → filter[user.name]=*ig*
     ->where('status', '!=', 'rejected') // → filter[status]=!rejected
     ->orderBy('created_at', 'desc');    // → sort=-created_at
 
-$paginator = $q->paginate(20);          // → page/per_page; вернётся обычный LengthAwarePaginator
+$paginator = $q->paginate(20);          // → page/per_page; returns standard LengthAwarePaginator
 ```
 
-Советы:
-- Для коротких имён используйте `getFilterAliases()` в модели (например, `name → user.name`).
-- Для запросов по диапазону задавайте строку `start,end` в одном значении: `filter[created_at]=2025-01-01,2025-01-31`.
-- Любые `with()` добавят `include=...`.
+Tips:
+- Use `getFilterAliases()` in your model for short names (e.g., `name → user.name`).
+- For range queries provide a single string `start,end`, e.g. `filter[created_at]=2025-01-01,2025-01-31`.
+- Any `with()` will add `include=...`.
 
 ---
 
