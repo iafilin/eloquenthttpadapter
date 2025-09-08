@@ -78,6 +78,29 @@ class Purchase extends HttpModel
 }
 ```
 
+### Filtering, sorting, includes (client)
+
+- Mark Filament columns as `searchable()`/`sortable()` or add `where`/`orderBy` to the query.
+- The client builder converts them to HTTP params:
+  - `filter[field]`, including relation paths like `user.name`
+  - `sort=column,-other`
+  - `include=rel1,rel2`
+- For short names on the client, return aliases from your `HttpModel::getFilterAliases()`:
+
+```php
+class Purchase extends HttpModel
+{
+    public function getFilterAliases(): array
+    {
+        return [
+            'name' => 'user.name',
+            'email' => 'user.email',
+            'tester_phone' => 'user.websso_id',
+        ];
+    }
+}
+```
+
 ### Using the Facade
 
 You can also use the facade for convenient access:
@@ -240,6 +263,8 @@ Example paginated response:
 
 Use these helpers in your Laravel API to accept filter/sort/include/page params from the client and produce standardized responses.
 
+### Option A: QueryApplier + HttpResponder (basic)
+
 ### 1) Configure allowlists (security)
 
 Update `config/eloquent-http-adapter.php`:
@@ -272,6 +297,35 @@ class UserController
         return $responder->paginated($request, $builder);
         // return $responder->collection($builder);
     }
+}
+```
+
+### Option B: HttpApiQuery (one-call helper, relations & aliases)
+
+If you prefer a one-liner with relation paths, aliases, composite filters and global search support, use:
+
+```php
+use Iafilin\EloquentHttpAdapter\Server\HttpApiQuery;
+
+public function index(Request $request)
+{
+    $base = \App\Models\Purchase::query();
+    return HttpApiQuery::paginate(
+        $base,
+        $request,
+        allowedFilters: [
+            'id','status','created_at','user.name','user.email','user.websso_id','goods.title',
+            'name','email','tester_phone','goods_summary', // short aliases
+        ],
+        allowedSorts: ['id','created_at','status'],
+        allowedIncludes: ['user','goods.specifications'],
+        betweenFields: ['created_at'],
+        fuzzyLikeFields: ['status','user.name','user.email','user.websso_id','goods.title'],
+        searchableFields: ['status','user.name','user.email','user.websso_id','goods.title'],
+        fieldAliases: [ 'name' => 'user.name', 'email' => 'user.email', 'tester_phone' => 'user.websso_id' ],
+        compositeOrFilters: [ 'goods_summary' => ['goods.title','goods.specifications.size','goods.specifications.color'] ],
+        defaultPerPage: 100,
+    );
 }
 ```
 
