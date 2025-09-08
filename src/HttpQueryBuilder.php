@@ -252,7 +252,8 @@ class HttpQueryBuilder extends Builder
                 continue;
             }
 
-            $whereHash = md5(serialize($where));
+            // Normalize to avoid serializing Closures or non-serializable objects
+            $whereHash = md5(json_encode($this->normalizeWhereForHash($where)));
             if (in_array($whereHash, $processedWheres)) {
                 continue;
             }
@@ -334,5 +335,40 @@ class HttpQueryBuilder extends Builder
                 $model->initializeIncludedRelations();
             }
         }
+    }
+
+    /**
+     * Normalize a where clause into a JSON-serializable form for hashing.
+     */
+    private function normalizeWhereForHash($value)
+    {
+        if (is_array($value)) {
+            $normalized = [];
+            foreach ($value as $k => $v) {
+                $normalized[$k] = $this->normalizeWhereForHash($v);
+            }
+            return $normalized;
+        }
+
+        if ($value instanceof \Closure) {
+            return 'closure';
+        }
+
+        if ($value instanceof QueryBuilder) {
+            return [
+                'query' => 'builder',
+                'wheres' => $this->normalizeWhereForHash($value->wheres ?? []),
+            ];
+        }
+
+        if ($value instanceof \DateTimeInterface) {
+            return $value->format(DATE_ATOM);
+        }
+
+        if (is_object($value)) {
+            return '\\object:' . get_class($value);
+        }
+
+        return $value;
     }
 }
