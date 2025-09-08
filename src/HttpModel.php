@@ -229,6 +229,15 @@ abstract class HttpModel extends Model implements HttpModelInterface
     }
 
     /**
+     * Optional map of short column names to relation-aware filter keys for client-side filtering.
+     * Example: ['name' => 'user.name', 'email' => 'user.email']
+     */
+    public function getFilterAliases(): array
+    {
+        return [];
+    }
+
+    /**
      * Load relations over HTTP by re-fetching with include parameter.
      *
      * @param array|string $relations

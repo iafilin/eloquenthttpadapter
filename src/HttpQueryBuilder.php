@@ -153,22 +153,17 @@ class HttpQueryBuilder extends Builder
 
     private function fetchData(): void
     {
-        try {
-            $params = $this->httpQueryParams();
-            $cacheEnabled = (bool) config('eloquent-http-adapter.cache.enabled', false);
+        $params = $this->httpQueryParams();
+        $cacheEnabled = (bool) config('eloquent-http-adapter.cache.enabled', false);
 
-            if ($cacheEnabled) {
-                $ttl = (int) config('eloquent-http-adapter.cache.ttl', 300);
-                $cacheKey = $this->buildCacheKey($params);
-                $this->response = Cache::remember($cacheKey, $ttl, function () use ($params) {
-                    return $this->httpClient->get('/', $params);
-                });
-            } else {
-                $this->response = $this->httpClient->get('/', $params);
-            }
-        } catch (Exception $e) {
-            report($e);
-            $this->response = null;
+        if ($cacheEnabled) {
+            $ttl = (int) config('eloquent-http-adapter.cache.ttl', 300);
+            $cacheKey = $this->buildCacheKey($params);
+            $this->response = Cache::remember($cacheKey, $ttl, function () use ($params) {
+                return $this->httpClient->get('/', $params);
+            });
+        } else {
+            $this->response = $this->httpClient->get('/', $params);
         }
     }
 
@@ -245,20 +240,23 @@ class HttpQueryBuilder extends Builder
             // Support Eloquent's "where key in (...)" used by Filament selection
             if (isset($where['type']) && strtolower((string) $where['type']) === 'in') {
                 if (isset($where['column'])) {
-                    $column = $this->extractColumnName($where['column']);
+                    $column = $this->normalizeFilterKey($where['column']);
                     $values = $where['values'] ?? [];
                     $this->addWhereParameter($params, $column, 'in', $values);
                 }
                 continue;
             }
 
-            // Normalize to avoid serializing Closures or non-serializable objects
+            // Some where clauses may contain Closures or non-serializable objects.
+            // Normalize them to a JSON-serializable structure before hashing.
             $whereHash = md5(json_encode($this->normalizeWhereForHash($where)));
             if (in_array($whereHash, $processedWheres)) {
                 continue;
             }
             $processedWheres[] = $whereHash;
 
+
+            // Unwrap nested groups (e.g., global search OR group)
             if (isset($where['type']) && $where['type'] === 'Nested') {
                 if (isset($where['query']) && $where['query'] instanceof QueryBuilder) {
                     $params = $params->merge($this->parseWheres($params, $where['query']->wheres));
@@ -267,21 +265,52 @@ class HttpQueryBuilder extends Builder
             }
 
             if (isset($where['column'])) {
-                $column = $this->extractColumnName($where['column']);
+                $column = $this->normalizeFilterKey($where['column']);
                 $operator = $where['operator'] ?? '=';
                 $value = $where['value'] ?? $where['values'] ?? [];
 
                 $this->addWhereParameter($params, $column, $operator, $value);
             }
+            // Some OR-groups may have no column (e.g., raw exists). We ignore those client-side.
         }
 
         return $params;
     }
 
-    private function extractColumnName(string $column): string
+    private function normalizeFilterKey($column): string
     {
-        $parts = explode('.', $column);
-        return end($parts);
+        $columnStr = (string) $column;
+        // Apply model-provided filter aliases
+        $aliases = [];
+        if ($this->getModel() && method_exists($this->getModel(), 'getFilterAliases')) {
+            $aliases = (array) $this->getModel()->getFilterAliases();
+            if (isset($aliases[$columnStr])) {
+                $columnStr = (string) $aliases[$columnStr];
+            }
+        }
+        // Normalize table-qualified columns to relation paths for the server side
+        // Example: users.name -> user.name (keep goods/specifications as-is)
+        if (str_contains($columnStr, '.')) {
+            [$first, $rest] = explode('.', $columnStr, 2);
+            $first = $this->mapTableToRelation($first);
+            return trim($first . '.' . $rest, '.');
+        }
+        return $columnStr;
+    }
+
+    private function mapTableToRelation(string $table): string
+    {
+        $table = strtolower($table);
+        // Special-case common relation names that differ from table
+        if ($table === 'users') {
+            return 'user';
+        }
+        // Leave "goods" as-is (relation is goods, not good)
+        if ($table === 'goods') {
+            return 'goods';
+        }
+        // Default: no change
+        return $table;
     }
 
     private function addWhereParameter(Collection $params, string $column, string $operator, $value): void
@@ -338,7 +367,11 @@ class HttpQueryBuilder extends Builder
     }
 
     /**
-     * Normalize a where clause into a JSON-serializable form for hashing.
+     * Normalize a where clause structure into a JSON-serializable form for hashing/deduping.
+     * - Closures are replaced with a string marker
+     * - QueryBuilder instances are represented by their nested where structures
+     * - DateTime-like objects are formatted
+     * - Other objects are replaced by their class name
      */
     private function normalizeWhereForHash($value)
     {
@@ -354,7 +387,13 @@ class HttpQueryBuilder extends Builder
             return 'closure';
         }
 
+        // Treat Stringable or objects with __toString as their string value to avoid dedupe collisions
+        if ($value instanceof \Stringable || (is_object($value) && method_exists($value, '__toString'))) {
+            return (string) $value;
+        }
+
         if ($value instanceof QueryBuilder) {
+            // Represent builder by its where conditions only to keep it deterministic
             return [
                 'query' => 'builder',
                 'wheres' => $this->normalizeWhereForHash($value->wheres ?? []),
@@ -366,6 +405,7 @@ class HttpQueryBuilder extends Builder
         }
 
         if (is_object($value)) {
+            // As a safe fallback, use class name so hashing is stable
             return '\\object:' . get_class($value);
         }
 
