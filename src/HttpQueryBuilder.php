@@ -288,10 +288,17 @@ class HttpQueryBuilder extends Builder
                 $columnStr = (string) $aliases[$columnStr];
             }
         }
-        // Normalize table-qualified columns to relation paths for the server side
-        // Example: users.name -> user.name (keep goods/specifications as-is)
+        // Normalize table-qualified columns:
+        // - If prefix equals base model table: drop it (car_brands.id -> id)
+        // - Else: map table name to relation path (users.name -> user.name)
         if (str_contains($columnStr, '.')) {
             [$first, $rest] = explode('.', $columnStr, 2);
+
+            $baseTable = $this->getModel() ? strtolower($this->getModel()->getTable()) : null;
+            if ($baseTable && strtolower((string) $first) === $baseTable) {
+                return $rest; // primary model column
+            }
+
             $first = $this->mapTableToRelation($first);
             return trim($first . '.' . $rest, '.');
         }
