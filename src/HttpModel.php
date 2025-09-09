@@ -8,6 +8,10 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
+use Illuminate\Support\Str;
+use Illuminate\Database\Eloquent\Relations\Relation;
+use ReflectionClass;
+use ReflectionMethod;
 
 abstract class HttpModel extends Model implements HttpModelInterface
 {
@@ -229,6 +233,25 @@ abstract class HttpModel extends Model implements HttpModelInterface
     }
 
     /**
+     * Prefer HTTP include loading for missing relations instead of DB lazy-load.
+     */
+    public function getRelationValue($key)
+    {
+        if ($this->relationLoaded($key)) {
+            return $this->relations[$key];
+        }
+
+        if (method_exists($this, $key)) {
+            $this->load($key);
+            if ($this->relationLoaded($key)) {
+                return $this->relations[$key];
+            }
+        }
+
+        return parent::getRelationValue($key);
+    }
+
+    /**
      * Optional map of short column names to relation-aware filter keys for client-side filtering.
      * Example: ['name' => 'user.name', 'email' => 'user.email']
      */
@@ -305,11 +328,23 @@ abstract class HttpModel extends Model implements HttpModelInterface
 
     protected function initializeIncludedRelationsFromAttributes(array $attributes): void
     {
-        if (empty($this->relationClassMap)) {
+        $map = $this->relationClassMap;
+
+        // 1) Try to derive from real Eloquent relation methods (reflection)
+        if (empty($map)) {
+            $map = $this->discoverRelationClassMapByReflection();
+        }
+
+        // 2) Fallback: guess by attribute keys and conventional names
+        if (empty($map)) {
+            $map = $this->guessRelationClassMapFromAttributes($attributes);
+        }
+
+        if (empty($map)) {
             return;
         }
 
-        foreach ($this->relationClassMap as $relationName => $relatedClass) {
+        foreach ($map as $relationName => $relatedClass) {
             if (!array_key_exists($relationName, $attributes)) {
                 continue;
             }
@@ -330,6 +365,7 @@ abstract class HttpModel extends Model implements HttpModelInterface
                 $this->setRelation($relationName, new EloquentCollection($relatedModels));
             } elseif (is_array($value)) {
                 $related = new $relatedClass();
+                $related->setAttribute($related->getKeyName(), $value[$related->getKeyName()] ?? null);
                 $related->forceFill($value);
                 $related->exists = true;
                 $this->setRelation($relationName, $related);
@@ -348,5 +384,76 @@ abstract class HttpModel extends Model implements HttpModelInterface
             $expectedKey++;
         }
         return true;
+    }
+
+    /**
+     * Guess relation class map based on attribute keys and conventional model names under App\\Models.
+     */
+    protected function guessRelationClassMapFromAttributes(array $attributes): array
+    {
+        $map = [];
+        foreach ($attributes as $key => $value) {
+            if (!is_array($value)) {
+                continue;
+            }
+            $guessed = $this->guessModelClassFromKey($key);
+            if ($guessed && is_subclass_of($guessed, Model::class)) {
+                $map[$key] = $guessed;
+            }
+        }
+        return $map;
+    }
+
+    protected function guessModelClassFromKey(string $key): ?string
+    {
+        $studly = Str::studly($key);
+        $candidates = [
+            $studly,
+            Str::of($studly)->singular()->toString(),
+        ];
+        foreach ($candidates as $name) {
+            $fqcn = "App\\Models\\{$name}";
+            if (class_exists($fqcn)) {
+                return $fqcn;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Discover relation class map using reflection of Eloquent relation methods.
+     */
+    protected function discoverRelationClassMapByReflection(): array
+    {
+        $map = [];
+        $class = new ReflectionClass($this);
+        foreach ($class->getMethods(ReflectionMethod::IS_PUBLIC) as $method) {
+            if ($method->getNumberOfParameters() !== 0 || $method->isStatic() || $method->class !== $class->getName()) {
+                continue;
+            }
+            $relatedClass = null;
+            $rt = $method->getReturnType();
+            if ($rt && class_exists($rt->getName()) && is_subclass_of($rt->getName(), Relation::class)) {
+                try {
+                    /** @var Relation $rel */
+                    $rel = Relation::noConstraints(fn() => $this->{$method->getName()}());
+                    $relatedClass = get_class($rel->getRelated());
+                } catch (\Throwable) {
+                }
+            }
+            if ($relatedClass === null) {
+                try {
+                    $rel = Relation::noConstraints(fn() => $this->{$method->getName()}());
+                    if ($rel instanceof Relation) {
+                        $relatedClass = get_class($rel->getRelated());
+                    }
+                } catch (\Throwable) {
+                }
+            }
+            if ($relatedClass) {
+                $map[$method->getName()] = $relatedClass;
+            }
+        }
+        return $map;
     }
 }
