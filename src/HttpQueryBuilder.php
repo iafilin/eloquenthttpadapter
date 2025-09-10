@@ -264,12 +264,25 @@ class HttpQueryBuilder extends Builder
                 continue;
             }
 
+            // Handle Exists queries (whereHas)
+            if (isset($where['type']) && $where['type'] === 'Exists') {
+                if (isset($where['query']) && $where['query'] instanceof QueryBuilder) {
+                    $this->parseExistsQuery($params, $where['query']);
+                }
+                continue;
+            }
+
             if (isset($where['column'])) {
                 $column = $this->normalizeFilterKey($where['column']);
                 $operator = $where['operator'] ?? '=';
                 $value = $where['value'] ?? $where['values'] ?? [];
 
-                $this->addWhereParameter($params, $column, $operator, $value);
+                // Обработка whereBetween
+                if (isset($where['type']) && strtolower((string) $where['type']) === 'between') {
+                    $this->addWhereParameter($params, $column, 'between', $value);
+                } else {
+                    $this->addWhereParameter($params, $column, $operator, $value);
+                }
             }
             // Some OR-groups may have no column (e.g., raw exists). We ignore those client-side.
         }
@@ -417,5 +430,38 @@ class HttpQueryBuilder extends Builder
         }
 
         return $value;
+    }
+
+    private function parseExistsQuery(Collection $params, QueryBuilder $query): void
+    {
+        // Parse the exists query to extract relation and column information
+        foreach ($query->wheres as $where) {
+            if (isset($where['type']) && $where['type'] === 'Basic' && isset($where['column'])) {
+                $column = $where['column'];
+                $value = $where['value'] ?? '';
+                $operator = $where['operator'] ?? '=';
+
+                // Handle Stringable objects
+                if (is_object($column) && method_exists($column, '__toString')) {
+                    $column = (string) $column;
+                }
+
+                // For exists queries, we need to map the column to the relation format
+                // Since we're in a users table context, we know this is user.name or user.email
+                $relation = 'user';
+                $fullColumn = $relation . '.' . $column;
+
+                // Add to filter parameters
+                $filterPrefix = config('eloquent-http-adapter.query_builder.filter_prefix', 'filter');
+                $key = "{$filterPrefix}[{$fullColumn}]";
+
+                if ($operator === 'like') {
+                    // Convert SQL LIKE pattern to wildcard format
+                    $value = str_replace('%', '*', $value);
+                }
+
+                $params->put($key, $value);
+            }
+        }
     }
 }
